@@ -309,12 +309,12 @@ function Home() {
                             return (
                                 <div
                                     key={`${idx}`}
-                                    className="group flex-shrink-0 px-12 flex items-center justify-center transition-all duration-300 hover:scale-110 active:scale-95"
+                                    className="group flex-shrink-0 px-16 flex items-center justify-center transition-all duration-300 hover:scale-110 active:scale-95"
                                 >
                                     <img 
                                         src={company.src} 
                                         alt={company.name} 
-                                        className="h-16 md:h-24 w-auto object-contain transition-all duration-300 hover:scale-110"
+                                        className="h-20 md:h-32 w-auto object-contain transition-all duration-300 hover:scale-110"
                                     />
                                 </div>
                             );
