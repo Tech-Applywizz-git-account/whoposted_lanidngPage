@@ -16,7 +16,7 @@ export default async function handler(request: Request) {
         const { cart } = await request.json(); // Expecting cart details or amount
         // For simplicity, we'll hardcode or extract an amount. 
         // In a real app, calculate amount on server to avoid tampering.
-        const amount = '100.00'; // Default or calculate from cart
+        const amount = '4.99'; // Default or calculate from cart
 
         const accessToken = await generateAccessToken();
         const url = `${PAYPAL_API_BASE}/v2/checkout/orders`;
