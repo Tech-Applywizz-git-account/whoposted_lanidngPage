@@ -1,18 +1,14 @@
 import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Check, ChevronsUpDown, Search, ShieldCheck, X } from "lucide-react";
+import { Check, ChevronsUpDown, Search, X } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import {
     Dialog,
     DialogContent,
     DialogHeader,
     DialogTitle,
-    DialogTrigger,
     DialogDescription,
-    DialogFooter,
-    DialogClose
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
 
 // Define Country Codes locally
 const COUNTRY_CODES = [
@@ -268,7 +264,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
         }
     }, []);
 
-    const onApprove = useCallback(async (data: any, actions: any) => {
+    const onApprove = useCallback(async (data: any, _actions: any) => {
         try {
             const { email, fullName } = formDataRef.current;
 
