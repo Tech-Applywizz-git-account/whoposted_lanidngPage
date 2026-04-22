@@ -216,7 +216,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
             
             // Add a timeout to the fetch call
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout
+            const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 second timeout
             
             try {
                 const response = await fetch('/api/razorpay/create-order', {
