@@ -2,6 +2,9 @@ import { createClient } from "@supabase/supabase-js";
 import crypto from 'crypto';
 
 export default async function handler(req: Request) {
+    const requestId = Math.random().toString(36).substring(7);
+    console.log(`[${requestId}] [INFO] Payment Success API called.`);
+    
     if (req.method !== 'POST') {
         return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { status: 405 });
     }
@@ -11,7 +14,7 @@ export default async function handler(req: Request) {
     const supabaseServiceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
     if (!supabaseUrl || !supabaseServiceKey) {
-        console.error("[CRITICAL] Supabase configuration missing in backend environment.");
+        console.error(`[${requestId}] [CRITICAL] Supabase configuration missing`);
         return new Response(JSON.stringify({ error: 'Internal Server Configuration Error', details: 'Missing Supabase URL or Service Key' }), { status: 500 });
     }
 
@@ -30,16 +33,16 @@ export default async function handler(req: Request) {
             metadata
         } = payload;
 
-        console.log(`[SUCCESS API] [${paymentGateway}] Starting verification for ${email}`);
+        console.log(`[${requestId}] [${paymentGateway?.toUpperCase()}] Starting verification for ${email}`);
 
         // --- RAZORPAY SIGNATURE VERIFICATION ---
         if (paymentGateway === 'razorpay') {
-            console.log("[SUCCESS API] Verifying Razorpay signature...");
+            console.log(`[${requestId}] Verifying Razorpay signature...`);
             const secret = (process.env.RAZORPAY_KEY_SECRET || process.env.VITE_RAZORPAY_KEY_SECRET || "").trim();
             const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = metadata || {};
 
             if (!secret) {
-                console.error("[SUCCESS API] RAZORPAY_KEY_SECRET is missing!");
+                console.error(`[${requestId}] RAZORPAY_KEY_SECRET is missing!`);
                 throw new Error("Server configuration error: Razorpay secret missing");
             }
 
@@ -49,28 +52,33 @@ export default async function handler(req: Request) {
                 .digest('hex');
 
             if (generated_signature !== razorpay_signature) {
-                console.error("[SUCCESS API] Signature mismatch!");
+                console.error(`[${requestId}] Signature mismatch!`);
                 throw new Error("Invalid payment signature");
             }
-            console.log("[SUCCESS API] Signature verified.");
+            console.log(`[${requestId}] Signature verified.`);
         }
 
         // --- 1. RECORD TRANSACTION ---
-        console.log("[SUCCESS API] Checking for duplicate transaction...");
+        console.log(`[${requestId}] Checking for duplicate transaction...`);
         const { data: duplicateTx, error: fetchErr } = await supabase
             .from('whoposted_transactions')
             .select('id')
             .eq('transaction_id', transactionId)
             .maybeSingle();
 
-        if (fetchErr) console.warn("[SUCCESS API] Supabase fetch error (non-fatal):", fetchErr);
-
-        if (duplicateTx) {
-            console.log(`[SUCCESS API] Transaction ${transactionId} already exists. Returning success.`);
-            return new Response(JSON.stringify({ success: true, message: 'Already processed' }), { status: 200 });
+        if (fetchErr) {
+            console.warn(`[${requestId}] Supabase fetch error (non-fatal):`, fetchErr);
         }
 
-        console.log("[SUCCESS API] Inserting new transaction record...");
+        if (duplicateTx) {
+            console.log(`[${requestId}] Transaction ${transactionId} already exists. Returning success.`);
+            return new Response(JSON.stringify({ success: true, message: 'Already processed' }), { 
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+
+        console.log(`[${requestId}] Inserting new transaction record...`);
         const expiryDate = new Date();
         expiryDate.setMonth(expiryDate.getMonth() + 1);
 
@@ -88,20 +96,24 @@ export default async function handler(req: Request) {
         });
 
         if (txError) {
-            console.error("[SUCCESS API] Transaction record failed:", txError);
+            console.error(`[${requestId}] Transaction record failed:`, txError);
             throw new Error(`Failed to record transaction: ${txError.message}`);
         }
-        console.log("[SUCCESS API] Transaction recorded.");
+        console.log(`[${requestId}] Transaction recorded.`);
 
         // --- 2. UPDATE FORM STATUS ---
-        console.log("[SUCCESS API] Updating form status...");
-        await supabase
+        console.log(`[${requestId}] Updating form status...`);
+        const { error: updateError } = await supabase
             .from('user_by_form')
             .update({ payment_status: 'paid' })
             .eq('email', email);
+        
+        if (updateError) {
+            console.warn(`[${requestId}] Form status update failed (non-fatal):`, updateError);
+        }
 
         // --- 3. PROVISION USER ACCOUNT ---
-        console.log("[SUCCESS API] Provisioning Auth account...");
+        console.log(`[${requestId}] Provisioning Auth account...`);
         const firstName = fullName.split(' ')[0] || "User";
         const generatedPassword = `${firstName}@123`;
 
@@ -113,31 +125,32 @@ export default async function handler(req: Request) {
         });
 
         if (authError && !authError.message.includes("already registered")) {
-            console.error("[SUCCESS API] Auth creation failed:", authError);
+            console.error(`[${requestId}] Auth creation failed:`, authError);
         } else {
-            console.log("[SUCCESS API] Auth account ready.");
+            console.log(`[${requestId}] Auth account ready.`);
         }
 
-        // --- 4. SEND NOTIFICATION ---
-        console.log("[SUCCESS API] Attempting to send success email...");
+        // --- 4. SEND NOTIFICATION (non-blocking) ---
+        console.log(`[${requestId}] Attempting to send success email...`);
         try {
             await sendSuccessEmail(email, fullName, transactionId, new Date().toISOString(), expiryDate.toISOString(), generatedPassword);
-            console.log("[SUCCESS API] Email sent.");
-        } catch (emailErr: any) {
-            console.error("[SUCCESS API] Email notification failed (non-fatal):", emailErr.message);
+            console.log(`[${requestId}] Email sent.`);
+        } catch (emailErr: unknown) {
+            const emailMessage = emailErr instanceof Error ? emailErr.message : 'Unknown error';
+            console.error(`[${requestId}] Email notification failed (non-fatal):`, emailMessage);
         }
 
-        console.log("[SUCCESS API] All steps completed successfully.");
+        console.log(`[${requestId}] All steps completed successfully.`);
         return new Response(JSON.stringify({ success: true }), { 
             status: 200,
             headers: { 'Content-Type': 'application/json' }
         });
 
-    } catch (error: any) {
-
-        console.error("[FATAL ERROR] payment-success verification failed:", error);
+    } catch (error: unknown) {
+        console.error(`[${requestId}] [FATAL ERROR] payment-success verification failed:`, error);
+        const message = error instanceof Error ? error.message : 'Internal Server Error';
         return new Response(JSON.stringify({ 
-            error: error.message || 'Internal Server Error'
+            error: message
         }), { 
             status: 500,
             headers: { 'Content-Type': 'application/json' }

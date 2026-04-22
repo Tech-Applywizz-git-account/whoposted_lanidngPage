@@ -13,8 +13,9 @@ export default async function handler(req: Request) {
         amount = body.amount;
         currency = body.currency || "USD";
         if (!amount) throw new Error("Amount is required");
-    } catch (err: any) {
-        return new Response(JSON.stringify({ error: `Invalid Request: ${err.message}` }), { status: 400 });
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return new Response(JSON.stringify({ error: `Invalid Request: ${message}` }), { status: 400 });
     }
 
     try {
@@ -22,6 +23,7 @@ export default async function handler(req: Request) {
         const keySecret = (process.env.RAZORPAY_KEY_SECRET || process.env.VITE_RAZORPAY_KEY_SECRET || "").trim();
 
         if (!keyId || !keySecret) {
+            console.error(`[${requestId}] [ERROR] Razorpay keys not found`);
             return new Response(JSON.stringify({ 
                 error: 'Razorpay keys not found in environment.',
                 details: `ID: ${!!keyId}, Secret: ${!!keySecret}`
@@ -40,28 +42,40 @@ export default async function handler(req: Request) {
         console.log(`[${requestId}] [DEBUG] Calling Razorpay API for ${amount} ${currency}...`);
 
         // Add an internal timeout for the fetch call to Razorpay
-        const rzpResponse = await fetch('https://api.razorpay.com/v1/orders', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'application/json',
-                'User-Agent': 'WhoPosted-Production-Server'
-            },
-            body: JSON.stringify(payload),
-            signal: AbortSignal.timeout(15000) // 15 second server-side timeout
-        }).catch(err => {
-            if (err.name === 'AbortError' || err.name === 'TimeoutError') {
-                throw new Error("Razorpay API timed out (server-side). Possible connectivity issue.");
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout
+        
+        let rzpResponse;
+        try {
+            rzpResponse = await fetch('https://api.razorpay.com/v1/orders', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Basic ${auth}`,
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'WhoPosted-Production-Server'
+                },
+                body: JSON.stringify(payload),
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+        } catch (fetchError: unknown) {
+            clearTimeout(timeoutId);
+            if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+                console.error(`[${requestId}] [TIMEOUT] Razorpay API request timed out`);
+                return new Response(JSON.stringify({ 
+                    error: "Razorpay API timed out. Please try again.",
+                    type: "TimeoutError"
+                }), { status: 504 });
             }
-            throw err;
-        });
+            throw fetchError;
+        }
 
         const responseText = await rzpResponse.text();
         
         if (!rzpResponse.ok) {
             console.error(`[${requestId}] [RAZORPAY ERROR] Status: ${rzpResponse.status}`, responseText);
             let errorData;
-            try { errorData = JSON.parse(responseText); } catch (e) { errorData = { raw: responseText }; }
+            try { errorData = JSON.parse(responseText); } catch { errorData = { raw: responseText }; }
             return new Response(JSON.stringify({ 
                 error: errorData.error?.description || 'Razorpay API rejected the request',
                 details: errorData
@@ -69,16 +83,19 @@ export default async function handler(req: Request) {
         }
 
         const data = JSON.parse(responseText);
+        console.log(`[${requestId}] [SUCCESS] Order created: ${data.id}`);
         return new Response(JSON.stringify(data), { 
             status: 200, 
             headers: { 'Content-Type': 'application/json' } 
         });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error(`[${requestId}] [FATAL ERROR]`, error);
+        const message = error instanceof Error ? error.message : 'Internal Server Error';
+        const name = error instanceof Error ? error.name : 'UnknownError';
         return new Response(JSON.stringify({ 
-            error: error.message || 'Internal Server Error',
-            type: error.name
+            error: message,
+            type: name
         }), { status: 500 });
     }
 }

@@ -20,6 +20,18 @@ const COUNTRY_CODES = [
     { name: "Germany", code: "+49", flag: "🇩🇪" },
 ];
 
+// PayPal types
+interface PayPalDetails {
+    id: string;
+    purchase_units: Array<{
+        payments: {
+            captures: Array<{
+                id: string;
+            }>;
+        };
+    }>;
+}
+
 const initialOptions = {
     clientId: (import.meta.env.PAYPAL_CLIENT_ID || import.meta.env.VITE_PAYPAL_CLIENT_ID || "test").trim(),
     currency: "USD",
@@ -180,12 +192,12 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
     };
 
     const handleRazorpayPayment = async () => {
-        console.log("handleRazorpayPayment started");
+        console.log("[RAZORPAY] Payment flow started");
         setMessage(""); 
         
         // Load razorpay script dynamically if not already present
         if (!(window as any).Razorpay) {
-            console.log("Razorpay script not found. Loading dynamically...");
+            console.log("[RAZORPAY] Script not found. Loading dynamically...");
             setMessage("Loading Razorpay SDK...");
             try {
                 const script = document.createElement('script');
@@ -193,30 +205,31 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                 script.async = true;
                 document.body.appendChild(script);
 
-                await new Promise((resolve, reject) => {
+                await new Promise<void>((resolve, reject) => {
                     script.onload = () => {
-                        console.log("Razorpay script loaded successfully");
-                        resolve(true);
+                        console.log("[RAZORPAY] Script loaded successfully");
+                        resolve();
                     };
                     script.onerror = () => {
-                        console.error("Razorpay script failed to load");
+                        console.error("[RAZORPAY] Script failed to load");
                         reject(new Error("Failed to load Razorpay SDK. Check your internet connection or ad-blocker."));
                     };
                 });
-            } catch (err: any) {
-                console.error("Script load error:", err);
-                setMessage("Script Error: " + err.message);
+            } catch (err: unknown) {
+                console.error("[RAZORPAY] Script load error:", err);
+                const message = err instanceof Error ? err.message : 'Unknown error';
+                setMessage("Script Error: " + message);
                 return;
             }
         }
 
         try {
-            console.log("Initiating order creation...");
-            setMessage("Initiating Razorpay...");
+            console.log("[RAZORPAY] Initiating order creation...");
+            setMessage("Creating payment order...");
             
             // Add a timeout to the fetch call
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 second timeout
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout for client-side
             
             try {
                 const response = await fetch('/api/razorpay/create-order', {
@@ -227,19 +240,19 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                 });
 
                 clearTimeout(timeoutId);
-                console.log("Order creation response status:", response.status);
+                console.log("[RAZORPAY] Order creation response status:", response.status);
                 const data = await response.json();
-                console.log("Order creation data:", data);
+                console.log("[RAZORPAY] Order creation data:", data);
 
                 if (!response.ok) {
-                    throw new Error(data.error || "Order creation failed. Check API keys.");
+                    throw new Error(data.error || "Order creation failed. Please try again.");
                 }
 
                 const rzpKey = import.meta.env.VITE_RAZORPAY_KEY_ID || import.meta.env.RAZORPAY_KEY_ID;
-                console.log("Using Razorpay Key:", rzpKey ? "FOUND" : "MISSING");
+                console.log("[RAZORPAY] Key status:", rzpKey ? "FOUND" : "MISSING");
 
                 if (!rzpKey) {
-                    throw new Error("Razorpay Key ID is missing. Check environment variables.");
+                    throw new Error("Razorpay configuration error. Please contact support.");
                 }
 
                 const options = {
@@ -250,12 +263,12 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                     description: "Premium Subscription",
                     order_id: data.id,
                     handler: async (response: any) => {
-                        console.log("Payment successful handler called:", response);
+                        console.log("[RAZORPAY] Payment successful, verifying...", response);
                         setMessage("Verifying payment...");
                         try {
                             // Add timeout for verification
                             const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+                            const timeoutId = setTimeout(() => controller.abort(), 30000);
 
                             const finalizeRes = await fetch('/api/payment-success', {
                                 method: 'POST',
@@ -275,20 +288,23 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                             
                             clearTimeout(timeoutId);
                             const finalizeData = await finalizeRes.json();
-                            console.log("Finalize response:", finalizeData);
+                            console.log("[RAZORPAY] Verification response:", finalizeData);
                             if (finalizeData.success) {
-                                setMessage(`Transaction COMPLETED: ${response.razorpay_payment_id}`);
+                                setMessage(`Payment Successful! Transaction ID: ${response.razorpay_payment_id}`);
                             } else {
-                                setMessage("Verification failed: " + (finalizeData.error || "Unknown error"));
+                                setMessage("Payment verification failed. Please contact support with transaction ID: " + response.razorpay_payment_id);
                             }
-                        } catch (err: any) {
-                            console.error("Finalize error:", err);
-                            setMessage("Verification error: " + (err.name === 'AbortError' ? "Server timeout" : err.message));
+                        } catch (err: unknown) {
+                            console.error("[RAZORPAY] Verification error:", err);
+                            const message = err instanceof Error && err.name === 'AbortError' 
+                                ? "Verification timeout. Please contact support." 
+                                : (err instanceof Error ? err.message : 'Unknown error');
+                            setMessage("Verification error: " + message);
                         }
                     },
                     modal: {
                         ondismiss: function() {
-                            console.log("Razorpay modal dismissed");
+                            console.log("[RAZORPAY] Modal dismissed by user");
                             setMessage("");
                         }
                     },
@@ -296,27 +312,28 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                     theme: { color: "#9333ea" }
                 };
                 
-                console.log("Opening Razorpay modal...");
+                console.log("[RAZORPAY] Opening payment modal...");
                 const rzp = new (window as any).Razorpay(options);
                 rzp.on('payment.failed', function (response: any) {
-                    console.error("Payment failed:", response.error);
-                    setMessage("Payment Failed: " + response.error.description);
+                    console.error("[RAZORPAY] Payment failed:", response.error);
+                    setMessage("Payment Failed: " + (response.error?.description || "Unknown error. Please try again."));
                 });
                 rzp.open();
-                setMessage(""); // Clear "Initiating..." message once modal is open
-            } catch (fetchErr: any) {
-                if (fetchErr.name === 'AbortError') {
+                setMessage(""); // Clear "Creating..." message once modal is open
+            } catch (fetchErr: unknown) {
+                if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
                     throw new Error("Server took too long to respond. Please try again.");
                 }
                 throw fetchErr;
             }
-        } catch (err: any) {
-            console.error("Razorpay Error Flow:", err);
-            setMessage("Razorpay failed: " + err.message);
+        } catch (err: unknown) {
+            console.error("[RAZORPAY] Error Flow:", err);
+            const message = err instanceof Error ? err.message : 'Unknown error';
+            setMessage("Razorpay failed: " + message);
         }
     };
 
-    const handlePayPalSuccess = async (details: any) => {
+    const handlePayPalSuccess = async (details: PayPalDetails) => {
         setMessage("Verifying payment...");
         try {
             // Add timeout for verification
@@ -346,50 +363,88 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
             } else {
                 setMessage("Verification failed: " + (data.error || "Unknown error"));
             }
-        } catch (err: any) {
-            console.error("PayPal verify error:", err);
-            setMessage("Verification error: " + (err.name === 'AbortError' ? "Server timeout" : err.message));
+        } catch (err: unknown) {
+            console.error("[PAYPAL] Verify error:", err);
+            const message = err instanceof Error && err.name === 'AbortError' 
+                ? "Server timeout" 
+                : (err instanceof Error ? err.message : 'Unknown error');
+            setMessage("Verification error: " + message);
         }
     };
 
     const createOrder = useCallback(async () => {
+        console.log("[PAYPAL] Creating order...");
         try {
+            // Add timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            
             const response = await fetch('/api/paypal/create-order', {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     cart: [{ id: "MONTHLY_SUBSCRIPTION", quantity: 1 }]
                 }),
+                signal: controller.signal,
             });
 
+            clearTimeout(timeoutId);
             const orderData = await response.json();
-            if (orderData.id) return orderData.id;
+            
+            if (!response.ok) {
+                console.error("[PAYPAL] Order creation failed:", orderData);
+                throw new Error(orderData.error || "Failed to create PayPal order");
+            }
+            
+            if (orderData.id) {
+                console.log("[PAYPAL] Order created:", orderData.id);
+                return orderData.id;
+            }
             throw new Error(JSON.stringify(orderData));
-        } catch (error) {
-            console.error(error);
-            setMessage(`Could not initiate PayPal Checkout: ${error}`);
+        } catch (error: unknown) {
+            console.error("[PAYPAL] Order creation error:", error);
+            const message = error instanceof Error && error.name === 'AbortError'
+                ? "PayPal order creation timed out. Please try again."
+                : (error instanceof Error ? error.message : 'Unknown error');
+            setMessage(`Could not initiate PayPal Checkout: ${message}`);
+            return "";
         }
     }, []);
 
-    const onApprove = useCallback(async (data: any, _actions: any) => {
+    const onApprove = useCallback(async (data: { orderID: string }) => {
+        console.log("[PAYPAL] Approving order:", data.orderID);
         try {
-
+            // Add timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            
             const response = await fetch('/api/paypal/capture-order', {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ orderID: data.orderID }),
+                signal: controller.signal,
             });
 
+            clearTimeout(timeoutId);
             const orderData = await response.json();
 
+            if (!response.ok) {
+                console.error("[PAYPAL] Capture failed:", orderData);
+                throw new Error(orderData.error || "PayPal capture failed");
+            }
+
             if (orderData.status === 'COMPLETED') {
+                console.log("[PAYPAL] Order captured successfully");
                 await handlePayPalSuccess(orderData);
             } else {
                 throw new Error("Capture status: " + orderData.status);
             }
-        } catch (error: any) {
-            console.error(error);
-            setMessage(`Transaction error: ${error.message}`);
+        } catch (error: unknown) {
+            console.error("[PAYPAL] Capture error:", error);
+            const message = error instanceof Error && error.name === 'AbortError'
+                ? "PayPal capture timed out. Please try again."
+                : (error instanceof Error ? error.message : 'Unknown error');
+            setMessage(`Transaction error: ${message}`);
         }
     }, []);
 
