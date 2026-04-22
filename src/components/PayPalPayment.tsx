@@ -229,7 +229,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
             
             // Add a timeout to the fetch call
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout for client-side
+            const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout for client-side
             
             try {
                 const response = await fetch('/api/razorpay/create-order', {
@@ -377,7 +377,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
         try {
             // Add timeout
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
             
             const response = await fetch('/api/paypal/create-order', {
                 method: "POST",
@@ -416,7 +416,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
         try {
             // Add timeout
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
             
             const response = await fetch('/api/paypal/capture-order', {
                 method: "POST",

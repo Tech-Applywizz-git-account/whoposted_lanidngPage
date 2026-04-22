@@ -42,8 +42,9 @@ export default async function handler(req: Request) {
         console.log(`[${requestId}] [DEBUG] Calling Razorpay API for ${amount} ${currency}...`);
 
         // Add an internal timeout for the fetch call to Razorpay
+        // Keep it under 10s to stay within Vercel's default serverless timeout
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout
+        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
         
         let rzpResponse;
         try {

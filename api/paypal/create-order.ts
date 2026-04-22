@@ -38,8 +38,9 @@ export default async function handler(request: Request) {
         console.log(`[${requestId}] [DEBUG] Creating PayPal order...`);
         
         // Add timeout to PayPal API call
+        // Keep it under 10s to stay within Vercel's default serverless timeout
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout
+        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
         
         let response;
         try {
