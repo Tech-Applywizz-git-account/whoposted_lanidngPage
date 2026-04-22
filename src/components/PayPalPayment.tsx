@@ -196,7 +196,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
             const response = await fetch('/api/razorpay/create-order', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ amount: 1.00, currency: "INR" })
+                body: JSON.stringify({ amount: 4.99, currency: "USD" })
             });
 
             const data = await response.json();
@@ -206,10 +206,11 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                 throw new Error(data.error || "Failed to create payment order. Please check dashboard/keys.");
             }
 
-            const rzpKey = import.meta.env.RAZORPAY_KEY_ID || import.meta.env.VITE_RAZORPAY_KEY_ID;
+            const rzpKey = import.meta.env.VITE_RAZORPAY_KEY_ID || import.meta.env.RAZORPAY_KEY_ID;
 
             if (!rzpKey) {
-                throw new Error("Razorpay Key ID is missing in environment variables.");
+                console.error("Razorpay Key ID is missing. Check your environment variables.");
+                throw new Error("Razorpay configuration is incomplete. Please contact support.");
             }
 
             const options = {

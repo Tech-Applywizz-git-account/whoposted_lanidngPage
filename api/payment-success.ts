@@ -12,7 +12,7 @@ export default async function handler(req: Request) {
 
     if (!supabaseUrl || !supabaseServiceKey) {
         console.error("[CRITICAL] Supabase configuration missing in backend environment.");
-        return new Response(JSON.stringify({ error: 'Internal Server Configuration Error' }), { status: 500 });
+        return new Response(JSON.stringify({ error: 'Internal Server Configuration Error', details: 'Missing Supabase URL or Service Key' }), { status: 500 });
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
@@ -34,11 +34,17 @@ export default async function handler(req: Request) {
 
         // --- RAZORPAY SIGNATURE VERIFICATION ---
         if (paymentGateway === 'razorpay') {
-            const secret = (process.env.RAZORPAY_KEY_SECRET || "").trim();
-            const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = metadata;
+            const secret = (process.env.RAZORPAY_KEY_SECRET || process.env.VITE_RAZORPAY_KEY_SECRET || "").trim();
+            const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = metadata || {};
 
-            if (!razorpay_signature) {
-                throw new Error("Razorpay signature missing in metadata");
+            if (!secret) {
+                console.error("[CRITICAL] RAZORPAY_KEY_SECRET is missing for verification!");
+                throw new Error("Server configuration error: Razorpay secret missing");
+            }
+
+            if (!razorpay_signature || !razorpay_order_id || !razorpay_payment_id) {
+                console.error("[ERROR] Missing Razorpay fields in metadata:", metadata);
+                throw new Error("Razorpay payment details missing in metadata");
             }
 
             const generated_signature = crypto
