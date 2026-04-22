@@ -1,8 +1,10 @@
-import Razorpay from 'razorpay';
+export const config = {
+    runtime: 'edge',
+};
 
 export default async function handler(req: Request) {
     const requestId = Math.random().toString(36).substring(7);
-    console.log(`[${requestId}] [INFO] Razorpay Create Order API called.`);
+    console.log(`[${requestId}] [INFO] Razorpay Create Order API called (Fetch Mode).`);
     
     if (req.method !== 'POST') {
         return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { status: 405 });
@@ -12,9 +14,6 @@ export default async function handler(req: Request) {
         const body = await req.json();
         const { amount, currency = "USD" } = body;
         
-        console.log(`[${requestId}] [DEBUG] Amount: ${amount}, Currency: ${currency}`);
-
-        // 1. Initialize Razorpay Server Client
         const keyId = (process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || "").trim();
         const keySecret = (process.env.RAZORPAY_KEY_SECRET || process.env.VITE_RAZORPAY_KEY_SECRET || "").trim();
 
@@ -26,66 +25,51 @@ export default async function handler(req: Request) {
             }), { status: 500 });
         }
 
-        console.log(`[${requestId}] [DEBUG] Initializing Razorpay Instance...`);
-        
-        // Handle potential import issues in different environments
-        let RazorpayConstructor = Razorpay as any;
-        if (RazorpayConstructor.default) {
-            RazorpayConstructor = RazorpayConstructor.default;
-        }
-
-        const razorpay = new RazorpayConstructor({
-            key_id: keyId,
-            key_secret: keySecret,
-        });
-
-        // 2. Create Order
+        // Razorpay expects amount in smallest currency unit
         const amountInSubunits = Math.round(parseFloat(amount) * 100);
         
-        const options = {
+        const payload = {
             amount: amountInSubunits,
             currency: currency,
             receipt: `rcpt_${Date.now()}`
         };
 
-        console.log(`[${requestId}] [DEBUG] Calling razorpay.orders.create with options:`, options);
+        console.log(`[${requestId}] [DEBUG] Sending request to Razorpay API...`);
 
-        // Manually wrap in a promise to handle SDK versions that might prefer callbacks
-        const order = await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error("Razorpay API Timeout")), 15000);
-            
-            razorpay.orders.create(options, (err: any, order: any) => {
-                clearTimeout(timeout);
-                if (err) {
-                    console.error(`[${requestId}] [SDK ERROR]`, err);
-                    reject(err);
-                } else {
-                    resolve(order);
-                }
-            });
+        const auth = btoa(`${keyId}:${keySecret}`);
+        
+        const response = await fetch('https://api.razorpay.com/v1/orders', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
         });
+
+        const data = await response.json();
         
-        console.log(`[${requestId}] [SUCCESS] Order created: ${(order as any).id}`);
+        if (!response.ok) {
+            console.error(`[${requestId}] [RAZORPAY ERROR]`, data);
+            return new Response(JSON.stringify({ 
+                error: data.error?.description || 'Razorpay API Error',
+                details: data
+            }), { status: response.status });
+        }
+
+        console.log(`[${requestId}] [SUCCESS] Order created: ${data.id}`);
         
-        return new Response(JSON.stringify(order), { 
+        return new Response(JSON.stringify(data), { 
             status: 200, 
             headers: { 'Content-Type': 'application/json' } 
         });
 
     } catch (error: any) {
-        console.error(`[${requestId}] [ERROR] Razorpay Failure:`, error);
-        
-        const errorMessage = error.description || error.message || 'Internal Server Error';
-        
-        return new Response(JSON.stringify({ 
-            error: errorMessage,
-            details: error
-        }), { 
-            status: 500, 
-            headers: { 'Content-Type': 'application/json' } 
-        });
+        console.error(`[${requestId}] [FATAL ERROR]`, error);
+        return new Response(JSON.stringify({ error: error.message || 'Internal Server Error' }), { status: 500 });
     }
 }
+
 
 
 

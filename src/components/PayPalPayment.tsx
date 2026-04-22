@@ -213,82 +213,96 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
         try {
             console.log("Initiating order creation...");
             setMessage("Initiating Razorpay...");
-            const response = await fetch('/api/razorpay/create-order', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ amount: 4.99, currency: "USD" })
-            });
-
-            console.log("Order creation response status:", response.status);
-            const data = await response.json();
-            console.log("Order creation data:", data);
-
-            if (!response.ok) {
-                throw new Error(data.error || "Order creation failed. Check API keys.");
-            }
-
-            const rzpKey = import.meta.env.VITE_RAZORPAY_KEY_ID || import.meta.env.RAZORPAY_KEY_ID;
-            console.log("Using Razorpay Key:", rzpKey ? "FOUND" : "MISSING");
-
-            if (!rzpKey) {
-                throw new Error("Razorpay Key ID is missing. Check environment variables.");
-            }
-
-            const options = {
-                key: rzpKey,
-                amount: data.amount,
-                currency: data.currency,
-                name: "WhoPosted",
-                description: "Premium Subscription",
-                order_id: data.id,
-                handler: async (response: any) => {
-                    console.log("Payment successful handler called:", response);
-                    setMessage("Verifying payment...");
-                    try {
-                        const finalizeRes = await fetch('/api/payment-success', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                orderId: response.razorpay_order_id,
-                                transactionId: response.razorpay_payment_id,
-                                amount: 4.99,
-                                currency: "USD",
-                                paymentGateway: "razorpay",
-                                email: email,
-                                fullName: fullName,
-                                metadata: response
-                            })
-                        });
-                        const finalizeData = await finalizeRes.json();
-                        console.log("Finalize response:", finalizeData);
-                        if (finalizeData.success) {
-                            setMessage(`Transaction COMPLETED: ${response.razorpay_payment_id}`);
-                        } else {
-                            setMessage("Verification failed: " + (finalizeData.error || "Unknown error"));
-                        }
-                    } catch (err: any) {
-                        console.error("Finalize error:", err);
-                        setMessage("Verification error: " + err.message);
-                    }
-                },
-                modal: {
-                    ondismiss: function() {
-                        console.log("Razorpay modal dismissed");
-                        setMessage("");
-                    }
-                },
-                prefill: { name: fullName, email: email },
-                theme: { color: "#9333ea" }
-            };
             
-            console.log("Opening Razorpay modal...");
-            const rzp = new (window as any).Razorpay(options);
-            rzp.on('payment.failed', function (response: any) {
-                console.error("Payment failed:", response.error);
-                setMessage("Payment Failed: " + response.error.description);
-            });
-            rzp.open();
-            setMessage(""); // Clear "Initiating..." message once modal is open
+            // Add a timeout to the fetch call
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout
+            
+            try {
+                const response = await fetch('/api/razorpay/create-order', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ amount: 4.99, currency: "USD" }),
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeoutId);
+                console.log("Order creation response status:", response.status);
+                const data = await response.json();
+                console.log("Order creation data:", data);
+
+                if (!response.ok) {
+                    throw new Error(data.error || "Order creation failed. Check API keys.");
+                }
+
+                const rzpKey = import.meta.env.VITE_RAZORPAY_KEY_ID || import.meta.env.RAZORPAY_KEY_ID;
+                console.log("Using Razorpay Key:", rzpKey ? "FOUND" : "MISSING");
+
+                if (!rzpKey) {
+                    throw new Error("Razorpay Key ID is missing. Check environment variables.");
+                }
+
+                const options = {
+                    key: rzpKey,
+                    amount: data.amount,
+                    currency: data.currency,
+                    name: "WhoPosted",
+                    description: "Premium Subscription",
+                    order_id: data.id,
+                    handler: async (response: any) => {
+                        console.log("Payment successful handler called:", response);
+                        setMessage("Verifying payment...");
+                        try {
+                            const finalizeRes = await fetch('/api/payment-success', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    orderId: response.razorpay_order_id,
+                                    transactionId: response.razorpay_payment_id,
+                                    amount: 4.99,
+                                    currency: "USD",
+                                    paymentGateway: "razorpay",
+                                    email: email,
+                                    fullName: fullName,
+                                    metadata: response
+                                })
+                            });
+                            const finalizeData = await finalizeRes.json();
+                            console.log("Finalize response:", finalizeData);
+                            if (finalizeData.success) {
+                                setMessage(`Transaction COMPLETED: ${response.razorpay_payment_id}`);
+                            } else {
+                                setMessage("Verification failed: " + (finalizeData.error || "Unknown error"));
+                            }
+                        } catch (err: any) {
+                            console.error("Finalize error:", err);
+                            setMessage("Verification error: " + err.message);
+                        }
+                    },
+                    modal: {
+                        ondismiss: function() {
+                            console.log("Razorpay modal dismissed");
+                            setMessage("");
+                        }
+                    },
+                    prefill: { name: fullName, email: email },
+                    theme: { color: "#9333ea" }
+                };
+                
+                console.log("Opening Razorpay modal...");
+                const rzp = new (window as any).Razorpay(options);
+                rzp.on('payment.failed', function (response: any) {
+                    console.error("Payment failed:", response.error);
+                    setMessage("Payment Failed: " + response.error.description);
+                });
+                rzp.open();
+                setMessage(""); // Clear "Initiating..." message once modal is open
+            } catch (fetchErr: any) {
+                if (fetchErr.name === 'AbortError') {
+                    throw new Error("Server took too long to respond. Please try again.");
+                }
+                throw fetchErr;
+            }
         } catch (err: any) {
             console.error("Razorpay Error Flow:", err);
             setMessage("Razorpay failed: " + err.message);
