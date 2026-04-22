@@ -1,37 +1,40 @@
-export default async function handler(req: Request) {
+export default async function handler(req: any, res: any) {
     if (req.method !== 'POST') {
-        return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { status: 405 });
+        return res.status(405).json({ error: 'Method Not Allowed' });
     }
-
-    const { email } = await req.json();
-    if (!email) {
-        return new Response(JSON.stringify({ error: 'Email is required' }), { status: 400 });
-    }
-
-    // Generate 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 mins
-
-    const secret = process.env.OTP_SECRET || "fallback_secret_123";
-    
-    // Create a simple signature: hash(email + otp + expiresAt + secret)
-    // In actual production, use crypto.createHmac
-    const dataToSign = `${email}|${otp}|${expiresAt}|${secret}`;
-    const hash = Buffer.from(dataToSign).toString('base64'); 
 
     try {
-        // Send Email via MS Graph
-        await sendOtpEmail(email, otp);
+        const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+        const { email } = body;
+        
+        if (!email) {
+            return res.status(400).json({ error: 'Email is required' });
+        }
 
-        return new Response(JSON.stringify({ 
+        // Generate 6-digit OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiresAt = Date.now() + 10 * 60 * 1000; // 10 mins
+
+        const secret = process.env.OTP_SECRET || "fallback_secret_123";
+        
+        // Create a simple signature: hash(email + otp + expiresAt + secret)
+        const dataToSign = `${email}|${otp}|${expiresAt}|${secret}`;
+        const hash = Buffer.from(dataToSign).toString('base64'); 
+
+        // Send Email via MS Graph
+        console.log(`[OTP] Attempting to send OTP to ${email}`);
+        await sendOtpEmail(email, otp);
+        console.log(`[OTP] Successfully sent OTP to ${email}`);
+
+        return res.status(200).json({ 
             success: true, 
             message: 'OTP sent successfully',
             verificationToken: hash, // This is our stateless token
             expiresAt: expiresAt
-        }), { status: 200 });
+        });
     } catch (error: any) {
         console.error("[OTP ERROR]", error);
-        return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+        return res.status(500).json({ error: error.message || 'Internal Server Error' });
     }
 }
 
@@ -41,6 +44,12 @@ async function sendOtpEmail(toEmail: string, otp: string) {
     const clientSecret = (process.env.MS_CLIENT_SECRET || "").trim();
     const senderEmail = (process.env.MS_SENDER_EMAIL || "").trim();
 
+    if (!clientId || !tenantId || !clientSecret || !senderEmail) {
+        console.error("[OTP ERROR] Missing Microsoft credentials in environment variables.");
+        throw new Error("Email service is not configured correctly.");
+    }
+
+    console.log("[OTP] Fetching MS access token...");
     const tokenResponse = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -52,8 +61,18 @@ async function sendOtpEmail(toEmail: string, otp: string) {
         })
     });
 
-    const tokenData = await tokenResponse.json();
+    if (!tokenResponse.ok) {
+        const errText = await tokenResponse.text();
+        console.error("[OTP ERROR] MS Token fetch failed:", errText);
+        throw new Error("Failed to authenticate with email service.");
+    }
+
+    const tokenData: any = await tokenResponse.json();
     const accessToken = tokenData.access_token;
+
+    if (!accessToken) {
+        throw new Error("Failed to obtain access token for email service.");
+    }
 
     const mailOptions = {
         message: {
@@ -78,7 +97,8 @@ async function sendOtpEmail(toEmail: string, otp: string) {
         }
     };
 
-    await fetch(`https://graph.microsoft.com/v1.0/users/${senderEmail}/sendMail`, {
+    console.log("[OTP] Sending email via MS Graph...");
+    const sendResponse = await fetch(`https://graph.microsoft.com/v1.0/users/${senderEmail}/sendMail`, {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${accessToken}`,
@@ -86,4 +106,10 @@ async function sendOtpEmail(toEmail: string, otp: string) {
         },
         body: JSON.stringify(mailOptions)
     });
+
+    if (!sendResponse.ok) {
+        const errText = await sendResponse.text();
+        console.error("[OTP ERROR] MS Graph sendMail failed:", errText);
+        throw new Error("Failed to send verification email.");
+    }
 }
