@@ -128,11 +128,11 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
             const res = await fetch('/api/verify-otp', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    email, 
-                    otp: otpValue, 
-                    verificationToken, 
-                    expiresAt: otpExpiresAt 
+                body: JSON.stringify({
+                    email,
+                    otp: otpValue,
+                    verificationToken,
+                    expiresAt: otpExpiresAt
                 })
             });
             const data = await res.json();
@@ -154,19 +154,19 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
         try {
             const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.SUPABASE_URL || "";
             const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.SUPABASE_ANON_KEY || "";
-            
+
             if (supabaseUrl && supabaseAnonKey) {
                 const supabase = createClient(supabaseUrl, supabaseAnonKey);
                 // Use upsert to handle existing users without 409 conflict
                 // Note: This works best if you added the UNIQUE constraint to email as suggested
                 await supabase
                     .from('user_by_form')
-                    .upsert({ 
-                        email, 
-                        full_name: fullName, 
-                        country_code: countryCode, 
-                        mobile_number: mobileNumber, 
-                        payment_status: 'unpaid' 
+                    .upsert({
+                        email,
+                        full_name: fullName,
+                        country_code: countryCode,
+                        mobile_number: mobileNumber,
+                        payment_status: 'unpaid'
                     }, { onConflict: 'email' });
             }
             setSelectedGateway("none"); // Reset selection state
@@ -186,7 +186,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
             script.src = 'https://checkout.razorpay.com/v1/checkout.js';
             script.async = true;
             document.body.appendChild(script);
-            
+
             await new Promise((resolve) => {
                 script.onload = resolve;
             });
@@ -196,10 +196,16 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
             const response = await fetch('/api/razorpay/create-order', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ amount: 4.99, currency: "USD" })
+                body: JSON.stringify({ amount: 1.00, currency: "INR" })
             });
+
             const data = await response.json();
-            
+
+            if (!response.ok) {
+                console.error("Razorpay order creation failed:", data);
+                throw new Error(data.error || "Failed to create payment order. Please check dashboard/keys.");
+            }
+
             const rzpKey = import.meta.env.RAZORPAY_KEY_ID || import.meta.env.VITE_RAZORPAY_KEY_ID;
 
             if (!rzpKey) {
@@ -278,7 +284,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
 
             if (orderData.status === 'COMPLETED') {
                 const transaction = orderData.purchase_units[0].payments.captures[0];
-                
+
                 const finalizeRes = await fetch('/api/payment-success', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -312,7 +318,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
     return (
         <div className="w-full max-w-xl mx-auto p-4 flex items-center justify-center min-h-screen">
             <div className="bg-white w-full px-5 py-6 rounded-2xl shadow-xl border border-gray-100 overflow-y-auto max-h-[95vh]">
-                
+
                 {/* Header */}
                 <div className="flex justify-between items-start mb-6 sticky top-0 bg-white z-10">
                     <div className="text-center flex-1">
@@ -508,7 +514,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                                                 <div className="text-xs text-green-800 bg-green-100/50 p-3 rounded-lg border border-green-200/50">
                                                     Check your inbox for login instructions and access details.
                                                 </div>
-                                                <a 
+                                                <a
                                                     href="https://whoposted-main.vercel.app/login"
                                                     target="_blank"
                                                     rel="noopener noreferrer"
@@ -547,13 +553,13 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                                             </div>
                                         ) : (
                                             <div className="animate-in slide-in-from-right-4 duration-300">
-                                                <button 
+                                                <button
                                                     onClick={() => setSelectedGateway("none")}
                                                     className="text-xs font-semibold text-gray-500 hover:text-purple-600 mb-4 flex items-center gap-1 transition-colors"
                                                 >
                                                     &larr; Back to Payment Methods
                                                 </button>
-                                                
+
                                                 {selectedGateway === "paypal" && (
                                                     <PayPalScriptProvider options={initialOptions}>
                                                         <PayPalButtons
