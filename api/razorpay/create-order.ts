@@ -29,9 +29,9 @@ export default async function handler(req: Request) {
         console.log(`[${requestId}] [DEBUG] Initializing Razorpay Instance...`);
         
         // Handle potential import issues in different environments
-        let RazorpayConstructor = Razorpay;
-        if ((Razorpay as any).default) {
-            RazorpayConstructor = (Razorpay as any).default;
+        let RazorpayConstructor = Razorpay as any;
+        if (RazorpayConstructor.default) {
+            RazorpayConstructor = RazorpayConstructor.default;
         }
 
         const razorpay = new RazorpayConstructor({
@@ -48,17 +48,24 @@ export default async function handler(req: Request) {
             receipt: `rcpt_${Date.now()}`
         };
 
-        console.log(`[${requestId}] [DEBUG] Calling razorpay.orders.create...`);
+        console.log(`[${requestId}] [DEBUG] Calling razorpay.orders.create with options:`, options);
 
-        // Add a timeout to the razorpay call to prevent hanging
-        const orderPromise = razorpay.orders.create(options);
-        const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error("Razorpay API timeout after 10 seconds")), 10000)
-        );
-
-        const order = await Promise.race([orderPromise, timeoutPromise]) as any;
+        // Manually wrap in a promise to handle SDK versions that might prefer callbacks
+        const order = await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("Razorpay API Timeout")), 15000);
+            
+            razorpay.orders.create(options, (err: any, order: any) => {
+                clearTimeout(timeout);
+                if (err) {
+                    console.error(`[${requestId}] [SDK ERROR]`, err);
+                    reject(err);
+                } else {
+                    resolve(order);
+                }
+            });
+        });
         
-        console.log(`[${requestId}] [SUCCESS] Order created: ${order.id}`);
+        console.log(`[${requestId}] [SUCCESS] Order created: ${(order as any).id}`);
         
         return new Response(JSON.stringify(order), { 
             status: 200, 
@@ -79,5 +86,6 @@ export default async function handler(req: Request) {
         });
     }
 }
+
 
 
