@@ -180,37 +180,58 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
     };
 
     const handleRazorpayPayment = async () => {
+        console.log("handleRazorpayPayment started");
+        setMessage(""); 
+        
         // Load razorpay script dynamically if not already present
         if (!(window as any).Razorpay) {
-            const script = document.createElement('script');
-            script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-            script.async = true;
-            document.body.appendChild(script);
+            console.log("Razorpay script not found. Loading dynamically...");
+            setMessage("Loading Razorpay SDK...");
+            try {
+                const script = document.createElement('script');
+                script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+                script.async = true;
+                document.body.appendChild(script);
 
-            await new Promise((resolve) => {
-                script.onload = resolve;
-            });
+                await new Promise((resolve, reject) => {
+                    script.onload = () => {
+                        console.log("Razorpay script loaded successfully");
+                        resolve(true);
+                    };
+                    script.onerror = () => {
+                        console.error("Razorpay script failed to load");
+                        reject(new Error("Failed to load Razorpay SDK. Check your internet connection or ad-blocker."));
+                    };
+                });
+            } catch (err: any) {
+                console.error("Script load error:", err);
+                setMessage("Script Error: " + err.message);
+                return;
+            }
         }
 
         try {
+            console.log("Initiating order creation...");
+            setMessage("Initiating Razorpay...");
             const response = await fetch('/api/razorpay/create-order', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ amount: 4.99, currency: "USD" })
             });
 
+            console.log("Order creation response status:", response.status);
             const data = await response.json();
+            console.log("Order creation data:", data);
 
             if (!response.ok) {
-                console.error("Razorpay order creation failed:", data);
-                throw new Error(data.error || "Failed to create payment order. Please check dashboard/keys.");
+                throw new Error(data.error || "Order creation failed. Check API keys.");
             }
 
             const rzpKey = import.meta.env.VITE_RAZORPAY_KEY_ID || import.meta.env.RAZORPAY_KEY_ID;
+            console.log("Using Razorpay Key:", rzpKey ? "FOUND" : "MISSING");
 
             if (!rzpKey) {
-                console.error("Razorpay Key ID is missing. Check your environment variables.");
-                throw new Error("Razorpay configuration is incomplete. Please contact support.");
+                throw new Error("Razorpay Key ID is missing. Check environment variables.");
             }
 
             const options = {
@@ -221,33 +242,55 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                 description: "Premium Subscription",
                 order_id: data.id,
                 handler: async (response: any) => {
-                    const finalizeRes = await fetch('/api/payment-success', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            orderId: response.razorpay_order_id,
-                            transactionId: response.razorpay_payment_id,
-                            amount: 4.99,
-                            currency: "USD",
-                            paymentGateway: "razorpay",
-                            email: email,
-                            fullName: fullName,
-                            metadata: response
-                        })
-                    });
-                    const finalizeData = await finalizeRes.json();
-                    if (finalizeData.success) {
-                        setMessage(`Transaction COMPLETED: ${response.razorpay_payment_id}`);
-                    } else {
-                        setMessage("Verification failed: " + finalizeData.error);
+                    console.log("Payment successful handler called:", response);
+                    setMessage("Verifying payment...");
+                    try {
+                        const finalizeRes = await fetch('/api/payment-success', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                orderId: response.razorpay_order_id,
+                                transactionId: response.razorpay_payment_id,
+                                amount: 4.99,
+                                currency: "USD",
+                                paymentGateway: "razorpay",
+                                email: email,
+                                fullName: fullName,
+                                metadata: response
+                            })
+                        });
+                        const finalizeData = await finalizeRes.json();
+                        console.log("Finalize response:", finalizeData);
+                        if (finalizeData.success) {
+                            setMessage(`Transaction COMPLETED: ${response.razorpay_payment_id}`);
+                        } else {
+                            setMessage("Verification failed: " + (finalizeData.error || "Unknown error"));
+                        }
+                    } catch (err: any) {
+                        console.error("Finalize error:", err);
+                        setMessage("Verification error: " + err.message);
+                    }
+                },
+                modal: {
+                    ondismiss: function() {
+                        console.log("Razorpay modal dismissed");
+                        setMessage("");
                     }
                 },
                 prefill: { name: fullName, email: email },
                 theme: { color: "#9333ea" }
             };
+            
+            console.log("Opening Razorpay modal...");
             const rzp = new (window as any).Razorpay(options);
+            rzp.on('payment.failed', function (response: any) {
+                console.error("Payment failed:", response.error);
+                setMessage("Payment Failed: " + response.error.description);
+            });
             rzp.open();
+            setMessage(""); // Clear "Initiating..." message once modal is open
         } catch (err: any) {
+            console.error("Razorpay Error Flow:", err);
             setMessage("Razorpay failed: " + err.message);
         }
     };
@@ -531,6 +574,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                                         {selectedGateway === "none" ? (
                                             <div className="grid grid-cols-1 gap-4">
                                                 <button
+                                                    type="button"
                                                     onClick={handleRazorpayPayment}
                                                     className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-gray-200 rounded-2xl hover:border-purple-500 hover:bg-purple-50/50 transition-all group"
                                                 >
@@ -555,6 +599,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                                         ) : (
                                             <div className="animate-in slide-in-from-right-4 duration-300">
                                                 <button
+                                                    type="button"
                                                     onClick={() => setSelectedGateway("none")}
                                                     className="text-xs font-semibold text-gray-500 hover:text-purple-600 mb-4 flex items-center gap-1 transition-colors"
                                                 >
