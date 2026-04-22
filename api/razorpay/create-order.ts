@@ -4,28 +4,37 @@ export const config = {
 
 export default async function handler(req: Request) {
     const requestId = Math.random().toString(36).substring(7);
-    console.log(`[${requestId}] [INFO] Razorpay Create Order API called (Fetch Mode).`);
+    console.log(`[${requestId}] [INFO] Razorpay Create Order API called.`);
     
     if (req.method !== 'POST') {
         return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { status: 405 });
     }
 
+    let amount, currency;
     try {
-        const body = await req.json();
-        const { amount, currency = "USD" } = body;
-        
+        const bodyText = await req.text();
+        if (!bodyText) {
+            throw new Error("Request body is empty");
+        }
+        const body = JSON.parse(bodyText);
+        amount = body.amount;
+        currency = body.currency || "USD";
+    } catch (err: any) {
+        console.error(`[${requestId}] [ERROR] Failed to parse request body:`, err);
+        return new Response(JSON.stringify({ error: `Invalid Request Body: ${err.message}` }), { status: 400 });
+    }
+
+    try {
         const keyId = (process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || "").trim();
         const keySecret = (process.env.RAZORPAY_KEY_SECRET || process.env.VITE_RAZORPAY_KEY_SECRET || "").trim();
 
         if (!keyId || !keySecret) {
-            console.error(`[${requestId}] [CRITICAL] Razorpay Keys are MISSING!`);
             return new Response(JSON.stringify({ 
                 error: 'Razorpay configuration missing on server.',
                 details: 'RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET is not set.'
             }), { status: 500 });
         }
 
-        // Razorpay expects amount in smallest currency unit
         const amountInSubunits = Math.round(parseFloat(amount) * 100);
         
         const payload = {
@@ -34,11 +43,9 @@ export default async function handler(req: Request) {
             receipt: `rcpt_${Date.now()}`
         };
 
-        console.log(`[${requestId}] [DEBUG] Sending request to Razorpay API...`);
-
         const auth = btoa(`${keyId}:${keySecret}`);
         
-        const response = await fetch('https://api.razorpay.com/v1/orders', {
+        const rzpResponse = await fetch('https://api.razorpay.com/v1/orders', {
             method: 'POST',
             headers: {
                 'Authorization': `Basic ${auth}`,
@@ -47,18 +54,23 @@ export default async function handler(req: Request) {
             body: JSON.stringify(payload)
         });
 
-        const data = await response.json();
+        const responseText = await rzpResponse.text();
+        let data;
+        try {
+            data = JSON.parse(responseText);
+        } catch (e) {
+            console.error(`[${requestId}] [ERROR] Failed to parse Razorpay response:`, responseText);
+            throw new Error(`Razorpay returned non-JSON response: ${responseText.substring(0, 100)}`);
+        }
         
-        if (!response.ok) {
+        if (!rzpResponse.ok) {
             console.error(`[${requestId}] [RAZORPAY ERROR]`, data);
             return new Response(JSON.stringify({ 
                 error: data.error?.description || 'Razorpay API Error',
                 details: data
-            }), { status: response.status });
+            }), { status: rzpResponse.status });
         }
 
-        console.log(`[${requestId}] [SUCCESS] Order created: ${data.id}`);
-        
         return new Response(JSON.stringify(data), { 
             status: 200, 
             headers: { 'Content-Type': 'application/json' } 
@@ -69,6 +81,7 @@ export default async function handler(req: Request) {
         return new Response(JSON.stringify({ error: error.message || 'Internal Server Error' }), { status: 500 });
     }
 }
+
 
 
 
