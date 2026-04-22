@@ -373,7 +373,6 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
 
     const onApprove = useCallback(async (data: any, _actions: any) => {
         try {
-            const { email, fullName } = formDataRef.current;
 
             const response = await fetch('/api/paypal/capture-order', {
                 method: "POST",
