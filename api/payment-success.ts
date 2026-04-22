@@ -30,21 +30,17 @@ export default async function handler(req: Request) {
             metadata
         } = payload;
 
-        console.log(`[INFO] Processing ${paymentGateway} payment success for ${email}. Order: ${orderId}`);
+        console.log(`[SUCCESS API] [${paymentGateway}] Starting verification for ${email}`);
 
         // --- RAZORPAY SIGNATURE VERIFICATION ---
         if (paymentGateway === 'razorpay') {
+            console.log("[SUCCESS API] Verifying Razorpay signature...");
             const secret = (process.env.RAZORPAY_KEY_SECRET || process.env.VITE_RAZORPAY_KEY_SECRET || "").trim();
             const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = metadata || {};
 
             if (!secret) {
-                console.error("[CRITICAL] RAZORPAY_KEY_SECRET is missing for verification!");
+                console.error("[SUCCESS API] RAZORPAY_KEY_SECRET is missing!");
                 throw new Error("Server configuration error: Razorpay secret missing");
-            }
-
-            if (!razorpay_signature || !razorpay_order_id || !razorpay_payment_id) {
-                console.error("[ERROR] Missing Razorpay fields in metadata:", metadata);
-                throw new Error("Razorpay payment details missing in metadata");
             }
 
             const generated_signature = crypto
@@ -53,25 +49,28 @@ export default async function handler(req: Request) {
                 .digest('hex');
 
             if (generated_signature !== razorpay_signature) {
-                console.error("[CRITICAL] Razorpay signature mismatch!");
+                console.error("[SUCCESS API] Signature mismatch!");
                 throw new Error("Invalid payment signature");
             }
-            console.log("[SUCCESS] Razorpay signature verified successfully.");
+            console.log("[SUCCESS API] Signature verified.");
         }
 
-        // --- 1. RECORD TRANSACTION WITH IDEMPOTENCY ---
-        const { data: duplicateTx } = await supabase
+        // --- 1. RECORD TRANSACTION ---
+        console.log("[SUCCESS API] Checking for duplicate transaction...");
+        const { data: duplicateTx, error: fetchErr } = await supabase
             .from('whoposted_transactions')
             .select('id')
             .eq('transaction_id', transactionId)
             .maybeSingle();
 
+        if (fetchErr) console.warn("[SUCCESS API] Supabase fetch error (non-fatal):", fetchErr);
+
         if (duplicateTx) {
-            console.warn(`[WARN] Transaction ${transactionId} already exists. Skipping.`);
+            console.log(`[SUCCESS API] Transaction ${transactionId} already exists. Returning success.`);
             return new Response(JSON.stringify({ success: true, message: 'Already processed' }), { status: 200 });
         }
 
-        // --- 2. RECORD NEW TRANSACTION ---
+        console.log("[SUCCESS API] Inserting new transaction record...");
         const expiryDate = new Date();
         expiryDate.setMonth(expiryDate.getMonth() + 1);
 
@@ -89,21 +88,23 @@ export default async function handler(req: Request) {
         });
 
         if (txError) {
-            console.error("[ERROR] whoposted_transactions insert failed:", txError);
+            console.error("[SUCCESS API] Transaction record failed:", txError);
             throw new Error(`Failed to record transaction: ${txError.message}`);
         }
+        console.log("[SUCCESS API] Transaction recorded.");
 
-        // --- 3. UPDATE FORM STATUS ---
+        // --- 2. UPDATE FORM STATUS ---
+        console.log("[SUCCESS API] Updating form status...");
         await supabase
             .from('user_by_form')
             .update({ payment_status: 'paid' })
             .eq('email', email);
 
-        // --- 4. PROVISION USER ACCOUNT ---
+        // --- 3. PROVISION USER ACCOUNT ---
+        console.log("[SUCCESS API] Provisioning Auth account...");
         const firstName = fullName.split(' ')[0] || "User";
         const generatedPassword = `${firstName}@123`;
 
-        console.log(`[INFO] Provisioning account for ${email}...`);
         const { error: authError } = await supabase.auth.admin.createUser({
             email: email,
             password: generatedPassword,
@@ -112,23 +113,28 @@ export default async function handler(req: Request) {
         });
 
         if (authError && !authError.message.includes("already registered")) {
-            console.error("[ERROR] Supabase Auth creation failed:", authError);
+            console.error("[SUCCESS API] Auth creation failed:", authError);
+        } else {
+            console.log("[SUCCESS API] Auth account ready.");
         }
 
-        // --- 5. SEND NOTIFICATION ---
+        // --- 4. SEND NOTIFICATION ---
+        console.log("[SUCCESS API] Attempting to send success email...");
         try {
             await sendSuccessEmail(email, fullName, transactionId, new Date().toISOString(), expiryDate.toISOString(), generatedPassword);
-            console.log(`[SUCCESS] Onboarding email sent to ${email}`);
+            console.log("[SUCCESS API] Email sent.");
         } catch (emailErr: any) {
-            console.error("[EMAIL ERROR] Failed to send onboarding email:", emailErr.message);
+            console.error("[SUCCESS API] Email notification failed (non-fatal):", emailErr.message);
         }
 
+        console.log("[SUCCESS API] All steps completed successfully.");
         return new Response(JSON.stringify({ success: true }), { 
             status: 200,
             headers: { 'Content-Type': 'application/json' }
         });
 
     } catch (error: any) {
+
         console.error("[FATAL ERROR] payment-success verification failed:", error);
         return new Response(JSON.stringify({ 
             error: error.message || 'Internal Server Error'
@@ -146,42 +152,55 @@ async function sendSuccessEmail(toEmail: string, name: string, transactionId: st
     const senderEmail = (process.env.MS_SENDER_EMAIL || "").trim();
 
     if (!clientId || !tenantId || !clientSecret || !senderEmail) {
-        throw new Error("MS 365 configuration incomplete");
+        console.warn("[SUCCESS API] MS 365 config missing. Skipping email.");
+        return;
     }
 
-    const tokenResponse = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-            client_id: clientId,
-            scope: 'https://graph.microsoft.com/.default',
-            client_secret: clientSecret,
-            grant_type: 'client_credentials'
-        })
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000); // 8 second timeout
 
-    if (!tokenResponse.ok) throw new Error("MS Token Error");
-    const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
+    try {
+        const tokenResponse = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                client_id: clientId,
+                scope: 'https://graph.microsoft.com/.default',
+                client_secret: clientSecret,
+                grant_type: 'client_credentials'
+            }),
+            signal: controller.signal
+        });
 
-    const mailOptions = {
-        message: {
-            subject: "Your WhoPosted Account is Ready!",
-            body: {
-                contentType: "HTML",
-                content: `<p>Hi ${name}, your account is ready! Email: ${toEmail} Password: ${password}</p>`
+        if (!tokenResponse.ok) throw new Error("MS Token Error");
+        const tokenData = await tokenResponse.json();
+        const accessToken = tokenData.access_token;
+
+        const mailOptions = {
+            message: {
+                subject: "Your WhoPosted Account is Ready!",
+                body: {
+                    contentType: "HTML",
+                    content: `<p>Hi ${name}, your account is ready! Email: ${toEmail} Password: ${password}</p>`
+                },
+                toRecipients: [{ emailAddress: { address: toEmail } }]
+            }
+        };
+
+        const mailResponse = await fetch(`https://graph.microsoft.com/v1.0/users/${senderEmail}/sendMail`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
             },
-            toRecipients: [{ emailAddress: { address: toEmail } }]
-        }
-    };
-
-    await fetch(`https://graph.microsoft.com/v1.0/users/${senderEmail}/sendMail`, {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(mailOptions)
-    });
+            body: JSON.stringify(mailOptions),
+            signal: controller.signal
+        });
+        
+        if (!mailResponse.ok) console.error("[SUCCESS API] Mail send failed:", await mailResponse.text());
+    } finally {
+        clearTimeout(timeout);
+    }
 }
+
 

@@ -253,6 +253,10 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                         console.log("Payment successful handler called:", response);
                         setMessage("Verifying payment...");
                         try {
+                            // Add timeout for verification
+                            const controller = new AbortController();
+                            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
                             const finalizeRes = await fetch('/api/payment-success', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
@@ -265,8 +269,11 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                                     email: email,
                                     fullName: fullName,
                                     metadata: response
-                                })
+                                }),
+                                signal: controller.signal
                             });
+                            
+                            clearTimeout(timeoutId);
                             const finalizeData = await finalizeRes.json();
                             console.log("Finalize response:", finalizeData);
                             if (finalizeData.success) {
@@ -276,7 +283,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
                             }
                         } catch (err: any) {
                             console.error("Finalize error:", err);
-                            setMessage("Verification error: " + err.message);
+                            setMessage("Verification error: " + (err.name === 'AbortError' ? "Server timeout" : err.message));
                         }
                     },
                     modal: {
@@ -306,6 +313,42 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
         } catch (err: any) {
             console.error("Razorpay Error Flow:", err);
             setMessage("Razorpay failed: " + err.message);
+        }
+    };
+
+    const handlePayPalSuccess = async (details: any) => {
+        setMessage("Verifying payment...");
+        try {
+            // Add timeout for verification
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+            const response = await fetch('/api/payment-success', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    orderId: details.id,
+                    transactionId: details.purchase_units[0].payments.captures[0].id,
+                    amount: 4.99,
+                    currency: "USD",
+                    paymentGateway: "paypal",
+                    email: email,
+                    fullName: fullName,
+                    metadata: details
+                }),
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+            const data = await response.json();
+            if (data.success) {
+                setMessage(`Transaction COMPLETED: ${details.id}`);
+            } else {
+                setMessage("Verification failed: " + (data.error || "Unknown error"));
+            }
+        } catch (err: any) {
+            console.error("PayPal verify error:", err);
+            setMessage("Verification error: " + (err.name === 'AbortError' ? "Server timeout" : err.message));
         }
     };
 
@@ -341,29 +384,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
             const orderData = await response.json();
 
             if (orderData.status === 'COMPLETED') {
-                const transaction = orderData.purchase_units[0].payments.captures[0];
-
-                const finalizeRes = await fetch('/api/payment-success', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        orderId: data.orderID,
-                        transactionId: transaction.id,
-                        amount: transaction.amount.value,
-                        currency: transaction.amount.currency_code,
-                        paymentGateway: "paypal",
-                        email: email,
-                        fullName: fullName,
-                        metadata: transaction
-                    })
-                });
-
-                const finalizeData = await finalizeRes.json();
-                if (finalizeData.success) {
-                    setMessage(`Transaction COMPLETED: ${transaction.id}`);
-                } else {
-                    throw new Error("Verification failed: " + finalizeData.error);
-                }
+                await handlePayPalSuccess(orderData);
             } else {
                 throw new Error("Capture status: " + orderData.status);
             }
@@ -372,6 +393,7 @@ export default function PayPalPayment({ onClose }: { onClose?: () => void }) {
             setMessage(`Transaction error: ${error.message}`);
         }
     }, []);
+
 
     return (
         <div className="w-full max-w-xl mx-auto p-4 flex items-center justify-center min-h-screen">
