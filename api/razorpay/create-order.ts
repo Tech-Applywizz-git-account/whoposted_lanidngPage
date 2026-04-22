@@ -22,6 +22,8 @@ export default async function handler(req: Request) {
         const keyId = (process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || "").trim();
         const keySecret = (process.env.RAZORPAY_KEY_SECRET || process.env.VITE_RAZORPAY_KEY_SECRET || "").trim();
 
+        console.log(`[${requestId}] [DEBUG] Key ID present: ${!!keyId}, Key Secret present: ${!!keySecret}`);
+
         if (!keyId || !keySecret) {
             console.error(`[${requestId}] [ERROR] Razorpay keys not found`);
             return new Response(JSON.stringify({ 
@@ -41,10 +43,8 @@ export default async function handler(req: Request) {
         
         console.log(`[${requestId}] [DEBUG] Calling Razorpay API for ${amount} ${currency}...`);
 
-        // Add an internal timeout for the fetch call to Razorpay
-        // Keep it under 10s to stay within Vercel's default serverless timeout
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+        // Use AbortSignal.timeout() which is more reliable in serverless environments
+        const timeoutMs = 8000; // 8 seconds
         
         let rzpResponse;
         try {
@@ -56,21 +56,25 @@ export default async function handler(req: Request) {
                     'User-Agent': 'WhoPosted-Production-Server'
                 },
                 body: JSON.stringify(payload),
-                signal: controller.signal
+                signal: AbortSignal.timeout(timeoutMs)
             });
-            clearTimeout(timeoutId);
         } catch (fetchError: unknown) {
-            clearTimeout(timeoutId);
-            if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-                console.error(`[${requestId}] [TIMEOUT] Razorpay API request timed out`);
+            const errorMessage = fetchError instanceof Error ? fetchError.message : 'Unknown error';
+            const errorName = fetchError instanceof Error ? fetchError.name : 'UnknownError';
+            
+            if (errorName === 'TimeoutError' || errorMessage.includes('timeout')) {
+                console.error(`[${requestId}] [TIMEOUT] Razorpay API request timed out after ${timeoutMs}ms`);
                 return new Response(JSON.stringify({ 
                     error: "Razorpay API timed out. Please try again.",
                     type: "TimeoutError"
                 }), { status: 504 });
             }
+            
+            console.error(`[${requestId}] [FETCH ERROR]`, fetchError);
             throw fetchError;
         }
 
+        console.log(`[${requestId}] [DEBUG] Razorpay response status: ${rzpResponse.status}`);
         const responseText = await rzpResponse.text();
         
         if (!rzpResponse.ok) {

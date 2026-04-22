@@ -37,10 +37,8 @@ export default async function handler(request: Request) {
 
         console.log(`[${requestId}] [DEBUG] Creating PayPal order...`);
         
-        // Add timeout to PayPal API call
-        // Keep it under 10s to stay within Vercel's default serverless timeout
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+        // Use AbortSignal.timeout() which is more reliable in serverless environments
+        const timeoutMs = 8000; // 8 seconds
         
         let response;
         try {
@@ -51,13 +49,14 @@ export default async function handler(request: Request) {
                     Authorization: `Bearer ${accessToken}`,
                 },
                 body: JSON.stringify(payload),
-                signal: controller.signal,
+                signal: AbortSignal.timeout(timeoutMs),
             });
-            clearTimeout(timeoutId);
         } catch (fetchError: unknown) {
-            clearTimeout(timeoutId);
-            if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-                console.error(`[${requestId}] [TIMEOUT] PayPal API request timed out`);
+            const errorMessage = fetchError instanceof Error ? fetchError.message : 'Unknown error';
+            const errorName = fetchError instanceof Error ? fetchError.name : 'UnknownError';
+            
+            if (errorName === 'TimeoutError' || errorMessage.includes('timeout')) {
+                console.error(`[${requestId}] [TIMEOUT] PayPal API request timed out after ${timeoutMs}ms`);
                 return new Response(JSON.stringify({ 
                     error: "PayPal API timed out. Please try again.",
                     type: "TimeoutError"
@@ -66,6 +65,8 @@ export default async function handler(request: Request) {
                     headers: { 'Content-Type': 'application/json' }
                 });
             }
+            
+            console.error(`[${requestId}] [FETCH ERROR]`, fetchError);
             throw fetchError;
         }
 
